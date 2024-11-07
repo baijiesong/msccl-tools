@@ -53,24 +53,25 @@ class PathEncodingBase(object):
                 if collective.precondition(rank, chunk):
                     # Have chunks start on their starting ranks before the first step
                     # This is not required for the encoding, but makes debugging the models produced more intuitive
-                    s.add(_start(chunk, rank) == 0)
+                    s.add(_start(chunk, rank) == 0)  ##直接发
                 else:
                     # Any rank that gets a chunk (and doesn't start with it) must have a unique source for it
                     sent_once = PbEq([(_send(chunk, src, rank), 1) for src in self.topology.sources(rank)], 1)
-                    s.add(Implies(_start(chunk, rank) <= instance.steps, sent_once))
+                    s.add(Implies(_start(chunk, rank) <= instance.steps, sent_once))  ##A成立 B成立
                 # If the postcondition requires the chunk on the rank then it must start being there before the end
                 if collective.postcondition(rank, chunk):
                     s.add(_start(chunk, rank) <= instance.steps)
                 for src in self.topology.sources(rank):
-                    # If a rank send a chunk then it needs to have it before sending it
+                    # 如果一个节点 rank 发送一个数据块 chunk，则在发送之前需要先拥有这个数据块。
                     s.add(Implies(_send(chunk, src, rank), _start(chunk, src) < _start(chunk, rank)))
                     if instance.extra_memory != None:
-                        # Also to send a chunk it needs to not have been deleted before sending it
+                        # 同样，发送一个数据块需要在发送之前该数据块未被删除
                         s.add(Implies(_send(chunk, src, rank), _end(chunk, src) >= _start(chunk, rank) - 1))
-                    # Handle chunks at the same address getting reduced in combining collectives
+                    # 当多个块位于相同地址时，需要同时发送这些块
                     if collective.is_combining:
                         for other in collective.chunks():
                             if other != chunk and collective.address(other) == collective.address(chunk):
+                                # 如果当前块需要发送，那么要有另一个块在当前块之前开始发送，则需要同时发送另一个块，并且另一个块的发送时间与当前块的发送时间相同
                                 # If you send and another chunk at the same address is available (i.e. reduced) then you have to send that too at the same time
                                 s.add(Implies(And(_send(chunk, src, rank), _start(other, src) < _start(chunk, rank)),
                                                 And(_send(other, src, rank), (_start(other, rank) == _start(chunk, rank)))))
@@ -100,6 +101,7 @@ class PathEncodingBase(object):
 
         # Bandwidth
         # Each bandwidth group (e.g. a link or a switch) generates a separate set of constraints
+        # 根据拓扑结构的带宽约束，在每个步骤中限制发送的数据量不超过可用的带宽。
         for srcs, dsts, bw, _ in self.topology.bandwidth_constraints():
             # overlap is subtracted here because overlapping steps are considered together
             for step in range(instance.steps - overlap):
